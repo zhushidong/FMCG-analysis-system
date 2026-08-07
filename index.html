@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <!-- 手机端：禁止缩放 + 适配刘海屏安全区 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="description" content="合肥市区县-街道交互地图">
+  <title>合肥市区县-街道地图</title>
+
+  <link rel="stylesheet" href="css/style.css">
+
+  <!-- 第一步：加载本地配置（Key / 安全密钥 / 区县数据），必须先于高德脚本 -->
+  <script src="js/config.js"></script>
+
+  <!-- 第二步：注入 AMap JS API 2.0（安全密钥鉴权要求 _AMapSecurityConfig 先就绪） -->
+  <script>
+    (function () {
+      var cfg = window.HEFEI_MAP_CONFIG || {};
+      if (!cfg.key) {
+        document.getElementById('map').innerHTML =
+          '<div class="map-error">未配置高德 Key，请打开 js/config.js 填写</div>';
+        return;
+      }
+      window._AMapSecurityConfig = { securityJsCode: cfg.securityJsCode || '' };
+      var s = document.createElement('script');
+      s.src = 'https://webapi.amap.com/maps?v=2.0&key=' + encodeURIComponent(cfg.key) +
+        '&plugin=AMap.DistrictSearch,AMap.Scale,AMap.ToolBar';
+      s.onerror = function () {
+        document.getElementById('map').innerHTML =
+          '<div class="map-error">高德地图脚本加载失败：请检查网络或 Key 是否有效</div>';
+      };
+      document.head.appendChild(s);
+    })();
+  </script>
+</head>
+<body>
+  <!-- ===================== 顶栏 ===================== -->
+  <header class="app-header">
+    <h1 class="app-title">合肥市区县 · 街道地图</h1>
+    <div class="header-actions">
+      <button type="button" id="btn-reset" class="btn" title="回到整个合肥市视图">重置到全市</button>
+      <button type="button" id="btn-print" class="btn" title="打印 / 导出 PDF">打印</button>
+    </div>
+  </header>
+
+  <!-- ===================== 主体 ===================== -->
+  <main class="app-main">
+    <!-- 左侧 / 顶部抽屉：选择面板 -->
+    <aside class="side-panel" id="panel" aria-label="区域选择">
+      <div class="panel-head">
+        <span class="panel-title">选择区域</span>
+        <button type="button" id="btn-close-panel" class="panel-close" title="收起面板">×</button>
+      </div>
+      <div class="panel-body">
+        <label class="field-label" for="sel-district">区 / 县</label>
+        <select id="sel-district" class="field-select">
+          <option value="">— 请选择区县 —</option>
+        </select>
+
+        <label class="field-label" for="sel-street">街道 / 乡镇</label>
+        <select id="sel-street" class="field-select" disabled>
+          <option value="">— 先选择区县 —</option>
+        </select>
+
+        <p class="panel-tip">提示：点击地图上的区县或街道区域，可反向选中左侧列表。</p>
+      </div>
+    </aside>
+
+    <!-- 右侧：地图容器 -->
+    <div class="map-wrap">
+      <div id="map" class="map-container"></div>
+    </div>
+  </main>
+
+  <!-- 手机端：底部抽屉展开按钮 -->
+  <button type="button" id="btn-open-panel" class="panel-toggle" hidden>选择区域</button>
+
+  <!-- 主逻辑 -->
+  <script src="js/app.js"></script>
+</body>
+</html>
