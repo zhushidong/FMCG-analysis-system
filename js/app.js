@@ -773,7 +773,8 @@
     initDistrictSelect();
     bindEvents();
     // 预加载本地乡镇边界索引（选区县时避免等待）
-    fetch('data/index.json')
+    // 加时间戳参数破坏浏览器缓存：数据文件更新后，用户刷新即可拿到最新索引
+    fetch('data/index.json?t=' + Date.now())
       .then(function (r) { return r.json(); })
       .then(function (idx) { App.localTownIndex = idx; })
       .catch(function () { /* 索引缺失时仅用高德中心标记兜底 */ });
