@@ -412,13 +412,13 @@
         amapList = result.districtList[0].districtList || [];
       }
       if (!amapList.length) { return; } // 高德无数据/超时：保持本地列表
-      // 追加高德独有街道（本地没有的）
+      // 追加高德独有街道（本地没有的），并保存高德返回的边界点串供示意绘制
       var seen = {};
       merged.forEach(function (s) { seen[s.name] = true; });
       var added = false;
       amapList.forEach(function (a) {
         if (!seen[a.name]) {
-          merged.push({ name: a.name, center: a.center, code: null });
+          merged.push({ name: a.name, center: a.center, code: null, boundary: a.boundary || null });
           seen[a.name] = true;
           added = true;
         }
@@ -436,7 +436,9 @@
     var opts = '<option value="">— 请选择街道/乡镇 —</option>';
     list.forEach(function (s, i) {
       // options[0] 为提示项，街道 i 的 value=i（与 streetList 索引对齐）
-      opts += '<option value="' + i + '">' + s.name + '</option>';
+      // 无本地边界文件的街道（高德补齐）加（示意）后缀，提示边界为高德简化数据
+      var mark = s.code ? '' : '（示意）';
+      opts += '<option value="' + i + '">' + s.name + mark + '</option>';
     });
     el.street.innerHTML = opts;
     el.street.disabled = false;
@@ -460,9 +462,14 @@
     if (!street) { return; }
     App.currentStreet = street;
 
-    // 本地有边界文件 → 多边形高亮 + 名称标签；否则 → 中心标记兜底（自带名称标签）
+    // 本地有边界文件 → 多边形高亮 + 名称标签
+    // 无文件但高德返回了边界点串 → 用高德边界画示意多边形
+    // 两者都没有 → 中心标记兜底（自带名称标签）
     if (street.code && App.currentDistrict) {
       loadStreetBoundary(street);
+    } else if (street.boundary) {
+      clearRegionLabel();
+      drawStreetBoundaryStr(street);
     } else {
       clearRegionLabel();
       showStreetMarker(street);
@@ -497,10 +504,10 @@
       });
   }
 
-  // 绘制街道边界多边形（橙色）并框选到该街道
-  function drawStreetBoundary(feature) {
-    var rings = geoToRings(feature.geometry);
-    if (!rings.length) { return; }
+  // 渲染街道多边形（橙色）+ 名称标签 + 框选（本地 GeoJSON 与高德边界点串共用）
+  // 返回是否成功绘制（rings 为空返回 false，调用方可决定是否退化兜底）
+  function renderStreetRings(rings, street) {
+    if (!rings.length) { return false; }
     rings.forEach(function (ring) {
       var poly = new AMap.Polygon({
         map: App.map,
@@ -517,9 +524,25 @@
     });
     App.map.setFitView(App.streetPolygons, false, [50, 50, 50, 50], 16);
 
-    // 显示街道名称标签（用高德返回的中心点）
-    var c = (App.currentStreet && App.currentStreet.center) || App.map.getCenter();
-    showRegionLabel(App.currentStreet.name, c);
+    // 显示街道名称标签（优先街道中心点，缺省用当前地图中心）
+    var c = (street && street.center) || App.map.getCenter();
+    showRegionLabel(street ? street.name : '', c);
+    return true;
+  }
+
+  // 绘制街道边界多边形（本地 GeoJSON 数据）
+  function drawStreetBoundary(feature) {
+    var rings = geoToRings(feature.geometry);
+    renderStreetRings(rings, App.currentStreet);
+  }
+
+  // 用高德 DistrictSearch 返回的边界点串绘制街道示意多边形（本地无边界文件时）
+  function drawStreetBoundaryStr(street) {
+    var rings = parseBoundary(street.boundary);
+    if (!renderStreetRings(rings, street)) {
+      // 高德边界点串解析失败/为空 → 退化为中心标记兜底
+      showStreetMarker(street);
+    }
   }
 
   // 中心标记 + 名称标签（无边界数据时的兜底展示）
