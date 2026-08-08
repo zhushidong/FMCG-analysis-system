@@ -545,8 +545,25 @@
     }
   }
 
+  // 无边界数据时的用户提示条（3.5 秒自动消失，避免误以为页面异常）
+  function showNoBoundaryHint(streetName) {
+    var old = document.getElementById('no-boundary-hint');
+    if (old) { old.remove(); }
+    var tip = document.createElement('div');
+    tip.id = 'no-boundary-hint';
+    tip.textContent = '「' + streetName + '」暂无边界数据（功能区代管街道），当前仅显示中心位置';
+    tip.style.cssText =
+      'position:fixed;left:50%;bottom:88px;transform:translateX(-50%);' +
+      'background:rgba(255,255,255,.96);border:1.5px solid #FF6B00;border-radius:6px;' +
+      'color:#d35400;font-size:13px;font-weight:600;padding:8px 16px;z-index:9999;' +
+      'box-shadow:0 2px 8px rgba(0,0,0,.18);max-width:92vw;white-space:nowrap;';
+    document.body.appendChild(tip);
+    setTimeout(function () { tip.remove(); }, 3500);
+  }
+
   // 中心标记 + 名称标签（无边界数据时的兜底展示）
   function showStreetMarker(street) {
+    showNoBoundaryHint(street.name);
     var marker = new AMap.Marker({
       position: street.center,
       title: street.name,
