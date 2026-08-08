@@ -2,7 +2,7 @@
 
 选择区县，查看其乡镇/街道边界。纯静态，零后端，浏览器打开即用。
 
-在线地址：https://daxianzhi.github.io/Map_hf/
+在线地址：https://zhushidong.github.io/FMCG-analysis-system/
 
 ## 功能特性
 
@@ -123,7 +123,7 @@ https://geo.datav.aliyun.com/areas_v3/bound/{adcode}.json
 ### 阶段 7：部署上线
 
 - 初始尝试 Gitee Pages，后因 Gitee 停止免费 Pages 服务，切换至 GitHub Pages
-- 高德安全密钥配置域名白名单，只允许 `daxianzhi.github.io` 调用 Key
+- 高德安全密钥配置域名白名单，只允许 `zhushidong.github.io` 调用 Key
 - git 配置双远端备份：`github` + `origin`（Gitee），避免单点故障
 
 ### 阶段 8：迭代复盘（6 次提交）
