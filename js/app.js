@@ -32,7 +32,8 @@
     /* --- 合肥市默认遮罩（方案B：打开页面只显示合肥市） --- */
     cityMask: null,            // 遮罩多边形（合肥以外区域压暗）
     cityOutline: null,         // 合肥市边界轮廓线（蓝色描边）
-    cityBoundaryCache: null    // 合肥市边界 GeoJSON（遮罩数据缓存，避免重复请求）
+    cityBoundaryCache: null,   // 合肥市边界 GeoJSON（遮罩数据缓存，避免重复请求）
+    regionLabel: null          // 当前区域名称标签（合肥市 / 区县名 / 街道名）
   };
 
   var cfg = window.App.cfg;
@@ -154,12 +155,46 @@
 
     // 视野对准合肥市
     App.map.setFitView([App.cityOutline], false, [50, 50, 50, 50], 9.5);
+
+    // 显示"合肥市"名称标签（用数据自带的几何中心）
+    var c = (feature.properties && feature.properties.center) || cfg.cityCenter;
+    showRegionLabel(feature.properties.name || '合肥市', c);
   }
 
   // 移除遮罩（选择区县进入探索模式时调用）
   function clearCityMask() {
     if (App.cityMask) { App.map.remove(App.cityMask); App.cityMask = null; }
     if (App.cityOutline) { App.map.remove(App.cityOutline); App.cityOutline = null; }
+  }
+
+  /* ---------- 区域名称标签（图上显示当前区域名） ---------- */
+
+  // 在指定中心显示区域名称（合肥市 / 区县名 / 街道名），自动替换旧标签
+  function showRegionLabel(text, position) {
+    if (App.regionLabel) { App.map.remove(App.regionLabel); }
+    App.regionLabel = new AMap.Text({
+      text: text,
+      position: position,
+      offset: new AMap.Pixel(0, 0),
+      style: {
+        'background-color': 'rgba(255,255,255,.94)',
+        'border': '2px solid #215EFF',
+        'border-radius': '8px',
+        'padding': '6px 20px',
+        'color': '#215EFF',
+        'font-size': '22px',
+        'font-weight': 'bold',
+        'white-space': 'nowrap',
+        'box-shadow': '0 2px 8px rgba(0,0,0,.15)'
+      },
+      zIndex: 130
+    });
+    App.map.add(App.regionLabel);
+  }
+
+  // 清除区域名称标签
+  function clearRegionLabel() {
+    if (App.regionLabel) { App.map.remove(App.regionLabel); App.regionLabel = null; }
   }
 
   /* =========================================================
@@ -215,6 +250,10 @@
 
     // 飞行到区县范围（maxZoom 限制避免过度放大，padding 留出边距）
     App.map.setFitView(App.districtPolygons, false, [50, 50, 50, 50], 13);
+
+    // 显示区县名称标签（用数据自带的几何中心）
+    var c = (feature.properties && feature.properties.center) || App.map.getCenter();
+    showRegionLabel(districtName, c);
   }
 
   // 清除当前区县高亮
@@ -337,41 +376,46 @@
     return rings;
   }
 
-  // 查询区县下的街道/乡镇列表并填充下拉（高德列表为骨架 + 本地索引补边界code）
-  // 结果按区县缓存：同一区县重复切换零网络请求
+  // 查询区县下的街道/乡镇列表并填充下拉
+  // 策略：本地 index.json 立即渲染（name/center/code 全量，零等待）；
+  //       高德 DistrictSearch 后台补齐本地缺失的街道（异步，失败/超时不影响使用）
   function loadStreets(district) {
-    if (App.streetListCache[district.adcode]) {
-      fillStreetSelect(App.streetListCache[district.adcode]);
+    var adcode = district.adcode;
+    if (App.streetListCache[adcode]) {
+      fillStreetSelect(App.streetListCache[adcode]);
       return;
     }
-    var localList = App.localTownIndex[district.adcode] || [];
-    var ds = new AMap.DistrictSearch({ level: 'street', extensions: 'all' });
-    ds.search(district.adcode, function (status, result) {
+    var localList = App.localTownIndex[adcode] || [];
+    // 1) 本地立即渲染（91% 乡镇有边界 code，其余无 code 但 name/center 可用）
+    var merged = localList.map(function (l) {
+      return { name: l.name, center: l.center, code: l.code };
+    });
+    App.streetListCache[adcode] = merged;
+    fillStreetSelect(merged);
+
+    // 2) 高德后台补齐（本地缺失的街道，如源站无数据的 13 个乡镇）
+    var ds = new AMap.DistrictSearch({ level: 'street', extensions: 'all', timeout: 8000 });
+    ds.search(adcode, function (status, result) {
       var amapList = [];
       if (status === 'complete' && result.districtList && result.districtList.length) {
         amapList = result.districtList[0].districtList || [];
       }
-      if (!amapList.length && !localList.length) {
-        el.street.innerHTML = '<option value="">— 无街道数据 —</option>';
-        el.street.disabled = true;
-        return;
-      }
-      // 合并：以高德为骨架，同名匹配本地边界 code
+      if (!amapList.length) { return; } // 高德无数据/超时：保持本地列表
+      // 追加高德独有街道（本地没有的）
       var seen = {};
-      var merged = amapList.map(function (a) {
-        seen[a.name] = true;
-        var local = null;
-        localList.forEach(function (l) { if (l.name === a.name) { local = l; } });
-        return { name: a.name, center: a.center, code: local ? local.code : null };
-      });
-      // 本地独有（高德未返回）的追加
-      localList.forEach(function (l) {
-        if (!seen[l.name]) {
-          merged.push({ name: l.name, center: l.center, code: l.code });
+      merged.forEach(function (s) { seen[s.name] = true; });
+      var added = false;
+      amapList.forEach(function (a) {
+        if (!seen[a.name]) {
+          merged.push({ name: a.name, center: a.center, code: null });
+          seen[a.name] = true;
+          added = true;
         }
       });
-      App.streetListCache[district.adcode] = merged;
-      fillStreetSelect(merged);
+      if (added) {
+        App.streetListCache[adcode] = merged;
+        fillStreetSelect(merged);
+      }
     });
   }
 
@@ -404,10 +448,11 @@
     if (!street) { return; }
     App.currentStreet = street;
 
-    // 本地有边界文件 → 多边形高亮；否则 → 中心标记兜底
+    // 本地有边界文件 → 多边形高亮 + 名称标签；否则 → 中心标记兜底（自带名称标签）
     if (street.code && App.currentDistrict) {
       loadStreetBoundary(street);
     } else {
+      clearRegionLabel();
       showStreetMarker(street);
     }
   }
@@ -455,6 +500,10 @@
       App.streetPolygons.push(poly);
     });
     App.map.setFitView(App.streetPolygons, false, [50, 50, 50, 50], 16);
+
+    // 显示街道名称标签（用高德返回的中心点）
+    var c = (App.currentStreet && App.currentStreet.center) || App.map.getCenter();
+    showRegionLabel(App.currentStreet.name, c);
   }
 
   // 中心标记 + 名称标签（无边界数据时的兜底展示）
