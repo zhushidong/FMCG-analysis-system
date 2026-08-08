@@ -28,7 +28,11 @@
     /* --- 性能缓存（避免重复网络请求，切换秒开） --- */
     districtBoundaryCache: {}, // adcode → 区县边界 GeoJSON（本地文件或 DataV）
     streetListCache: {},       // adcode → 街道列表（高德查询结果，同一区县只查一次）
-    streetBoundaryCache: {}    // 街道 code → 边界 GeoJSON（选过的街道只 fetch 一次）
+    streetBoundaryCache: {},   // 街道 code → 边界 GeoJSON（选过的街道只 fetch 一次）
+    /* --- 合肥市默认遮罩（方案B：打开页面只显示合肥市） --- */
+    cityMask: null,            // 遮罩多边形（合肥以外区域压暗）
+    cityOutline: null,         // 合肥市边界轮廓线（蓝色描边）
+    cityBoundaryCache: null    // 合肥市边界 GeoJSON（遮罩数据缓存，避免重复请求）
   };
 
   var cfg = window.App.cfg;
@@ -65,6 +69,9 @@
     // 缩放控件
     App.map.addControl(new AMap.Scale());
     App.map.addControl(new AMap.ToolBar({ position: 'RB' }));
+
+    // 默认视图：合肥市遮罩（只显示合肥市，其他区域压暗）
+    loadCityMask();
   }
 
   /* =========================================================
@@ -83,6 +90,76 @@
         el.map.innerHTML = '<div class="map-error">高德地图加载超时：请检查网络或 Key 配置</div>';
       }
     }, 200);
+  }
+
+  /* =========================================================
+   * 2.5 合肥市默认遮罩（方案B）
+   *    打开页面：只显示合肥市辖区，市外区域压暗。
+   *    实现：一个覆盖全球的矩形多边形，合肥市边界作为"洞"（内环），
+   *    再叠加一条合肥市边界轮廓线；选择区县后移除遮罩，重置后恢复。
+   * ========================================================= */
+
+  // 世界范围矩形（作为遮罩外环，覆盖任何缩放级别下的可见区域）
+  var WORLD_RING = [[-180, 90], [180, 90], [180, -90], [-180, -90], [-180, 90]];
+
+  // 加载合肥市边界并绘制遮罩 + 轮廓
+  function loadCityMask() {
+    // 已加载过 → 直接重新绘制（数据复用，零网络请求）
+    if (App.cityBoundaryCache) {
+      drawCityMask(App.cityBoundaryCache);
+      return;
+    }
+    fetch('data/districts/340100.json')
+      .then(function (r) { return r.json(); })
+      .then(function (geo) {
+        var feature = geo.features && geo.features[0];
+        if (!feature || !feature.geometry) { throw new Error('无有效边界'); }
+        App.cityBoundaryCache = feature;
+        drawCityMask(feature);
+      })
+      .catch(function (e) {
+        console.warn('合肥市边界加载失败（遮罩未启用）：', e.message);
+      });
+  }
+
+  // 用合肥市边界 feature 绘制遮罩 + 轮廓
+  function drawCityMask(feature) {
+    var rings = geoToRings(feature.geometry);
+    if (!rings.length) { return; }
+
+    // 1) 遮罩：全球矩形 + 合肥边界作为洞（洞不填充 → 合肥区域透出）
+    App.cityMask = new AMap.Polygon({
+      map: App.map,
+      path: [WORLD_RING].concat(rings),
+      strokeColor: '#215EFF',
+      strokeWeight: 2,
+      strokeOpacity: 0,
+      fillColor: '#0b1424',
+      fillOpacity: 0.5,
+      bubble: true
+    });
+
+    // 2) 合肥市边界轮廓线（独立描边，清晰可见）
+    App.cityOutline = new AMap.Polygon({
+      map: App.map,
+      path: rings,
+      strokeColor: '#215EFF',
+      strokeWeight: 3,
+      strokeOpacity: 0.95,
+      fillColor: '#215EFF',
+      fillOpacity: 0.06,
+      bubble: true,
+      cursor: 'pointer'
+    });
+
+    // 视野对准合肥市
+    App.map.setFitView([App.cityOutline], false, [50, 50, 50, 50], 9.5);
+  }
+
+  // 移除遮罩（选择区县进入探索模式时调用）
+  function clearCityMask() {
+    if (App.cityMask) { App.map.remove(App.cityMask); App.cityMask = null; }
+    if (App.cityOutline) { App.map.remove(App.cityOutline); App.cityOutline = null; }
   }
 
   /* =========================================================
@@ -218,11 +295,12 @@
   // 区县选中入口
   function onDistrictSelected(adcode) {
     if (!adcode) {
-      // 切回"请选择区县"：清空街道
+      // 切回"请选择区县"：清空街道 + 恢复合肥市遮罩
       clearStreetLayer();
       el.street.innerHTML = '<option value="">— 先选择区县 —</option>';
       el.street.disabled = true;
       App.currentDistrict = null;
+      loadCityMask();
       return;
     }
     var district = null;
@@ -231,6 +309,8 @@
     });
     if (!district) { return; }
     App.currentDistrict = district;
+    // 进入区县探索模式：移除全市遮罩，展示区县边界
+    clearCityMask();
     clearStreetLayer();
     loadDistrictBoundary(district);
     loadStreets(district);
@@ -422,14 +502,14 @@
     el.btnOpenPanel.hidden = false;
   }
 
-  // 重置到全市视图
+  // 重置到全市视图（恢复合肥市遮罩）
   function resetView() {
     clearDistrictHighlight();
     clearStreetLayer();
     App.currentDistrict = null;
     el.street.innerHTML = '<option value="">— 先选择区县 —</option>';
     el.street.disabled = true;
-    App.map.setZoomAndCenter(cfg.cityZoom, cfg.cityCenter, false, 600);
+    loadCityMask();
   }
 
   // 打印
