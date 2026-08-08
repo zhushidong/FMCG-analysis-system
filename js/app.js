@@ -28,7 +28,8 @@
     /* --- 性能缓存（避免重复网络请求，切换秒开） --- */
     districtBoundaryCache: {}, // adcode → 区县边界 GeoJSON（本地文件或 DataV）
     streetListCache: {},       // adcode → 街道列表（高德查询结果，同一区县只查一次）
-    streetBoundaryCache: {},   // 街道 code → 边界 GeoJSON（选过的街道只 fetch 一次）
+    streetBoundaryCache: {},   // adcode_code → 边界 GeoJSON（选过的街道只 fetch 一次）
+    streetReqGen: 0,           // 街道列表请求序号（丢弃过期回调，防止快速切换区县串数据）
     /* --- 合肥市默认遮罩（方案B：打开页面只显示合肥市） --- */
     cityMask: null,            // 遮罩多边形（合肥以外区域压暗）
     cityOutline: null,         // 合肥市边界轮廓线（蓝色描边）
@@ -277,12 +278,16 @@
         return res.json();
       })
       .then(function (geo) {
+        // 快速切换区县时，旧请求晚到 → 直接丢弃（避免画错边界）
+        if (!App.currentDistrict || App.currentDistrict.adcode !== adcode) { return; }
         var feature = geo.features && geo.features[0];
         if (!feature || !feature.geometry) { throw new Error('本地边界无有效数据'); }
         App.districtBoundaryCache[adcode] = feature;
         highlightDistrict(feature, district.name);
       })
       .catch(function (e) {
+        // 用户已切换区县 → 不再回退，避免旧区县兜底覆盖新区县
+        if (!App.currentDistrict || App.currentDistrict.adcode !== adcode) { return; }
         console.warn('本地区县边界缺失，回退 DataV：', e.message);
         loadBoundaryFromDatav(district, function () {
           loadBoundaryFromDistrictSearch(district);
@@ -314,8 +319,10 @@
   function loadBoundaryFromDistrictSearch(district) {
     var ds = new AMap.DistrictSearch({ level: 'district', extensions: 'all' });
     ds.search(district.adcode, function (status, result) {
+      // 用户已切换区县 → 本次回调作废
+      if (!App.currentDistrict || App.currentDistrict.adcode !== district.adcode) { return; }
       if (status !== 'complete' || !result.districtList || !result.districtList.length) {
-        alert('区县边界加载失败：' + district.name);
+        console.warn('区县边界加载失败：', district.name);
         return;
       }
       var item = result.districtList[0];
@@ -381,6 +388,8 @@
   //       高德 DistrictSearch 后台补齐本地缺失的街道（异步，失败/超时不影响使用）
   function loadStreets(district) {
     var adcode = district.adcode;
+    // 本次请求序号：快速切换区县时，过期回调（gen 不匹配）直接丢弃
+    var gen = ++App.streetReqGen;
     if (App.streetListCache[adcode]) {
       fillStreetSelect(App.streetListCache[adcode]);
       return;
@@ -396,6 +405,8 @@
     // 2) 高德后台补齐（本地缺失的街道，如源站无数据的 13 个乡镇）
     var ds = new AMap.DistrictSearch({ level: 'street', extensions: 'all', timeout: 8000 });
     ds.search(adcode, function (status, result) {
+      // 用户已切换区县/重置 → 本次回调作废
+      if (gen !== App.streetReqGen) { return; }
       var amapList = [];
       if (status === 'complete' && result.districtList && result.districtList.length) {
         amapList = result.districtList[0].districtList || [];
@@ -438,6 +449,7 @@
     App.streetPolygons = [];
     App.streetMarkers = [];
     App.currentStreet = null;
+    clearRegionLabel(); // 街道名称标签一并清除（防止切回时残留）
   }
 
   // 街道选中处理
@@ -457,10 +469,11 @@
     }
   }
 
-  // 从本地 data/ 目录加载街道边界 GeoJSON 并高亮（按 code 缓存，重复选择零请求）
+  // 从本地 data/ 目录加载街道边界 GeoJSON 并高亮（按 adcode_code 缓存，重复选择零请求）
   function loadStreetBoundary(street) {
-    if (App.streetBoundaryCache[street.code]) {
-      drawStreetBoundary(App.streetBoundaryCache[street.code]);
+    var cacheKey = App.currentDistrict.adcode + '_' + street.code;
+    if (App.streetBoundaryCache[cacheKey]) {
+      drawStreetBoundary(App.streetBoundaryCache[cacheKey]);
       return;
     }
     var url = 'data/' + App.currentDistrict.adcode + '/' + street.code + '.json';
@@ -470,12 +483,15 @@
         return res.json();
       })
       .then(function (geo) {
+        // 快速切换区县时，旧请求晚到 → 直接丢弃
+        if (!App.currentStreet || App.currentStreet.code !== street.code) { return; }
         var feature = geo.features && geo.features[0];
         if (!feature || !feature.geometry) { throw new Error('无有效边界'); }
-        App.streetBoundaryCache[street.code] = feature;
+        App.streetBoundaryCache[cacheKey] = feature;
         drawStreetBoundary(feature);
       })
       .catch(function () {
+        if (!App.currentStreet || App.currentStreet.code !== street.code) { return; }
         // 边界文件缺失 → 中心标记兜底
         showStreetMarker(street);
       });
