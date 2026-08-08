@@ -34,7 +34,10 @@
     cityMask: null,            // 遮罩多边形（合肥以外区域压暗）
     cityOutline: null,         // 合肥市边界轮廓线（蓝色描边）
     cityBoundaryCache: null,   // 合肥市边界 GeoJSON（遮罩数据缓存，避免重复请求）
-    regionLabel: null          // 当前区域名称标签（合肥市 / 区县名 / 街道名）
+    regionLabel: null,         // 当前区域名称标签（合肥市 / 区县名 / 街道名）
+    /* --- 手绘边界（开发工具） --- */
+    mouseTool: null,           // AMap.MouseTool 实例（绘制多边形用）
+    drawPreview: null          // 手绘预览多边形（再次绘制前清除）
   };
 
   var cfg = window.App.cfg;
@@ -49,7 +52,8 @@
     btnPrint: $('btn-print'),
     panel: $('panel'),
     btnOpenPanel: $('btn-open-panel'),
-    btnClosePanel: $('btn-close-panel')
+    btnClosePanel: $('btn-close-panel'),
+    btnDraw: $('btn-draw')
   };
 
   /* =========================================================
@@ -624,6 +628,113 @@
   }
 
   /* =========================================================
+   * 6.5 手绘边界（开发工具）
+   * 部分街道（功能区代管）无边界数据源，可在地图上手动勾勒
+   * 其范围，导出 GeoJSON 交给数据侧处理入库。
+   * ========================================================= */
+  function startDrawBoundary() {
+    if (!App.map || !window.AMap || !AMap.MouseTool) {
+      alert('地图未就绪（MouseTool 插件加载失败），请刷新页面重试');
+      return;
+    }
+    // 清除上一次的手绘预览与工具
+    if (App.drawPreview) { App.map.remove(App.drawPreview); App.drawPreview = null; }
+    if (App.mouseTool) { App.mouseTool.close(true); }
+
+    App.mouseTool = new AMap.MouseTool(App.map);
+    App.mouseTool.polygon({
+      strokeColor: '#FF6B00',
+      strokeWeight: 2.5,
+      strokeOpacity: 0.9,
+      fillColor: '#FF6B00',
+      fillOpacity: 0.18
+    });
+    App.mouseTool.on('draw', function (e) {
+      App.drawPreview = e.obj;
+      var path = e.obj.getPath() || [];
+      if (!path.length) { return; }
+      var ring = [];
+      for (var i = 0; i < path.length; i++) {
+        ring.push([path[i].getLng(), path[i].getLat()]);
+      }
+      // GeoJSON 要求环首尾点相同（闭合）
+      var first = ring[0], last = ring[ring.length - 1];
+      if (first[0] !== last[0] || first[1] !== last[1]) {
+        ring.push([first[0], first[1]]);
+      }
+      showDrawResult(ring);
+    });
+  }
+
+  // 绘制完成后弹出结果卡片：复制 / 下载 GeoJSON
+  function showDrawResult(ring) {
+    var name = (App.currentStreet && App.currentStreet.name) || '未命名街道';
+    var adcode = (App.currentDistrict && App.currentDistrict.adcode) || '';
+    var geojson = {
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        properties: { name: name, adcode: adcode },
+        geometry: { type: 'Polygon', coordinates: [ring] }
+      }]
+    };
+    var text = JSON.stringify(geojson);
+
+    var old = document.getElementById('draw-result-panel');
+    if (old) { old.remove(); }
+
+    var panel = document.createElement('div');
+    panel.id = 'draw-result-panel';
+    panel.style.cssText = 'position:fixed;right:16px;top:64px;z-index:9998;width:300px;' +
+      'background:#fff;border:1.5px solid #FF6B00;border-radius:8px;padding:12px 14px;' +
+      'box-shadow:0 4px 16px rgba(0,0,0,.2);font-size:13px;color:#333;';
+    panel.innerHTML =
+      '<div style="font-weight:700;margin-bottom:6px;">边界绘制完成</div>' +
+      '<div style="margin-bottom:8px;color:#666;">街道：' + name + '　顶点数：' + ring.length + '</div>' +
+      '<div style="margin-bottom:8px;line-height:1.6;color:#d35400;font-size:12px;">' +
+      '将下方 GeoJSON 复制或下载后发送给 AI，即可入库生成边界多边形</div>' +
+      '<div style="display:flex;gap:8px;">' +
+      '<button id="btn-copy-json" class="btn" type="button">复制 JSON</button>' +
+      '<button id="btn-download-json" class="btn" type="button">下载 JSON</button>' +
+      '<button id="btn-close-draw" class="btn" type="button">关闭</button>' +
+      '</div>';
+    document.body.appendChild(panel);
+
+    document.getElementById('btn-copy-json').addEventListener('click', function () {
+      var done = function () { alert('已复制到剪贴板'); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); });
+      } else {
+        fallbackCopy(text, done);
+      }
+    });
+    document.getElementById('btn-download-json').addEventListener('click', function () {
+      var blob = new Blob([text], { type: 'application/json' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'boundary-' + name + '.json';
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    });
+    document.getElementById('btn-close-draw').addEventListener('click', function () {
+      panel.remove();
+    });
+  }
+
+  // 剪贴板 API 不可用时的降级：隐藏 textarea 选中 + execCommand
+  function fallbackCopy(text, done) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px;';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { alert('复制失败，请手动复制'); }
+    ta.remove();
+  }
+
+  /* =========================================================
    * 7. 事件绑定
    * ========================================================= */
   function bindEvents() {
@@ -631,6 +742,7 @@
     el.btnPrint.addEventListener('click', printPage);
     el.btnOpenPanel.addEventListener('click', openPanel);
     el.btnClosePanel.addEventListener('click', closePanel);
+    el.btnDraw.addEventListener('click', startDrawBoundary);
     // 手机端点击标题条也可展开
     el.panel.querySelector('.panel-head').addEventListener('click', openPanel);
 

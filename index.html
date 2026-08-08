@@ -24,7 +24,7 @@
       window._AMapSecurityConfig = { securityJsCode: cfg.securityJsCode || '' };
       var s = document.createElement('script');
       s.src = 'https://webapi.amap.com/maps?v=2.0&key=' + encodeURIComponent(cfg.key) +
-        '&plugin=AMap.DistrictSearch,AMap.Scale,AMap.ToolBar';
+        '&plugin=AMap.DistrictSearch,AMap.Scale,AMap.ToolBar,AMap.MouseTool';
       s.onerror = function () {
         document.getElementById('map').innerHTML =
           '<div class="map-error">高德地图脚本加载失败：请检查网络或 Key 是否有效</div>';
@@ -63,6 +63,8 @@
         </select>
 
         <p class="panel-tip">提示：点击地图上的区县或街道区域，可反向选中左侧列表。</p>
+
+        <button type="button" id="btn-draw" class="btn" title="选中无边界街道后，可在地图上勾勒其边界并导出 GeoJSON（开发工具）">绘制边界</button>
       </div>
     </aside>
 
